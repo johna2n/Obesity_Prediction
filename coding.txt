@@ -1,0 +1,330 @@
+# Simulation
+plink --simulate gwas_3.sim --make-bed --out sim3
+# Download pileup data
+prefetch --option-file SRR_Acc_List.txt
+
+# Convert sra file to fastq
+# Convert for single_end reads
+fastq-dump --outdir fastq --gzip --skip-technical  --readids --dumpbase --split-3 --clip SRR6996662.sra
+
+# Fix bash script
+awk '{ sub("\r$", ""); print }' sra_to_fastq.sh > sra_to_fastq_2.sh
+mv sra_to_fastq_2.sh sra_to_fastq.sh
+# Add environment variable
+export PATH="$PATH:/work/users/minhnth/gatk/gatk-4.2.0.0/"
+export PATH="$PATH:/home/minhnth/samtools-1.14/"
+
+'''
+It appears that when the FASTQ file was dumped from the SRA file, 
+the -I | --readids option was used in fastq-dump. 
+BWA requires that paired reads have completely identical read names, so this option isn't compatible.
+or you could rerun the dump from SRA to FASTQ (which could be just as fast if the SRA is cached):
+fastq-dump --split-files SRR3239806
+or, if you'd like to keep working with an interleaved file:
+fastq-dump --split-spot SRR3239806
+'''
+
+# Code for gatk
+# Trimmomatic
+trimmomatic SE \
+obesity/pileup/public/fastq/SRR6996662.fastq.gz \
+-threads 40 \
+obesity/pileup/public/output/SRR6996662_output.fastq.gz \
+TRAILING:20 \
+MINLEN:20
+
+# BWA MEM
+bwa mem gatk/hg38.fasta -t 40 \
+-R '@RG\tID:FLOWCELL1\tPU:LANE1\tPL:IONTORRENT\tLB:LIB-OBL-1\tSM:OBL' \
+obesity/pileup/public/output/SRR6996662_output.fastq.gz \
+> obesity/pileup/public/output/SRR6996662_aln_se.sam
+
+'''
+# Mark duplicate
+# Sort by name:
+samtools sort -n obesity/pileup/public/output/SRR6996662_aln_se.sam \
+> obesity/pileup/public/output/SRR6996662_namesort.sam
+# Create fixmate file:
+samtools fixmate -m obesity/pileup/public/output/SRR6996662_namesort.sam \
+obesity/pileup/public/output/SRR6996662_fixmate.sam
+# Sort by coordinate:
+samtools sort -o obesity/pileup/public/output/SRR6996662_cosort.sam \
+obesity/pileup/public/output/SRR6996662_fixmate.sam
+# Markduplicate:
+samtools markdup obesity/pileup/public/output/SRR6996662_cosort.sam \
+obesity/pileup/public/output/SRR6996662_markdup.sam
+# Check percentage marduplicate:
+samtools flagstat obesity/pileup/public/output/SRR6996662_markdup.sam
+'''
+samtools sort obesity/pileup/public/output/SRR6996662_aln_se.sam \
+-o obesity/pileup/public/output/SRR6996662_sort.bam
+
+
+# BaseRecalibrator
+gatk BaseRecalibrator -I obesity/pileup/public/output/SRR6996662_sort.bam \
+-R gatk/hg38.fasta \
+--known-sites gatk/1000G_omni2.5.hg38.vcf.gz \
+--known-sites gatk/1000G_phase1.snps.vcf.gz \
+--known-sites gatk/Axiom_Exome_Plus.vcf.gz \
+--known-sites gatk/dbsnp138.vcf.gz \
+--known-sites gatk/hapmap_3.3.hg38.vcf.gz \
+--known-sites gatk/known_indels.vcf.gz \
+--known-sites gatk/Mills_and_1000G.vcf.gz \
+-O obesity/pileup/public/output/SRR6996662_recal.table
+
+gatk ApplyBQSR \
+   -R gatk/hg38.fasta \
+   -I obesity/pileup/public/output/SRR6996662_sort.bam \
+   --bqsr-recal-file obesity/pileup/public/output/SRR6996662_recal.table \
+   -O obesity/pileup/public/output/SRR6996662_recal.bam
+
+samtools index obesity/pileup/public/output/SRR6996662_recal.bam
+
+gatk --java-options "-Xmx16g -XX:ParallelGCThreads=40" HaplotypeCaller \
+--native-pair-hmm-threads 40 --min-base-quality-score 40 \
+-R gatk/hg38.fasta \
+-I obesity/pileup/public/output/SRR6996662_recal.bam \
+-O obesity/pileup/public/output/SRR6996662_haplo.g.vcf.gz \
+-ERC GVCF -G StandardAnnotation \
+-G AS_StandardAnnotation -G StandardHCAnnotation
+
+# Run bash file
+bash gatk_obesity.sh /work/users/minhnth/gatk /work/users/minhnth/obesity/pileup/public/fastq/ /work/users/minhnth/obesity/pileup/public/output/ 64
+bash test.sh /work/users/minhnth/gatk /work/users/minhnth/obesity/pileup/public/fastq/test/ /work/users/minhnth/obesity/pileup/public/output/ 64
+
+bash gatk_paired_end_reads.sh \
+/work/users/minhnth/gatk \
+/work/users/minhnth/autism \
+/work/users/minhnth/results/autism \
+64
+
+bash gatk_paired_end_reads_extent.sh \
+/work/users/minhnth/gatk \
+/work/users/minhnth/projects/autism/autism_disease \
+/work/users/minhnth/projects/autism/results \
+ILLUMINA \
+64
+
+
+bash fix_fastq.sh \
+/work/users/minhnth/projects/autism/autism_ds \
+/work/users/minhnth/projects/autism/autism_disease 
+
+
+# Consolidate GVCFs
+gatk --java-options "-Xmx4g" GenomicsDBImport \
+-V obesity/pileup/public/output/haplo_SRR6996755.g.vcf.gz \
+-V obesity/pileup/public/output/haplo_SRR6996800.g.vcf.gz \
+--genomicsdb-workspace-path my_database \
+-L /work/users/minhnth/gatk/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list \
+--reader-threads 60 \
+--tmp-dir /work/users/minhnth/tmp/ \
+#--batch-size 50 
+
+'''
+gatk --java-options "-Xmx4g" GenomicsDBImport \
+--genomicsdb-workspace-path my_database \
+-L /work/users/minhnth/gatk/resources_broad_hg38_v0_wgs_calling_regions.hg38.interval_list \
+--reader-threads 60 \
+--tmp-dir /work/users/minhnth/tmp/ \
+--sample-name-map obesity/pileup/public/output/cohort.sample_map
+#--batch-size 50 
+'''
+
+gatk --java-options "-Xmx4g" GenotypeGVCFs \
+-R gatk/hg38.fasta \
+-V gendb://my_database \
+-O obesity/pileup/public/output/cohort.vcf.gz \
+#-new-qual 
+
+# VQSR
+gatk --java-options "-Xmx3g -Xms3g" VariantFiltration \
+-V obesity/pileup/public/output/cohort.vcf.gz \
+--filter-expression "ExcessHet > 54.69" \
+--filter-name ExcessHet \
+-O obesity/pileup/public/output/cohort_excesshet.vcf.gz 
+
+gatk MakeSitesOnlyVcf \
+-I obesity/pileup/public/output/cohort_excesshet.vcf.gz \
+-O obesity/pileup/public/output/cohort_sitesonly.vcf.gz
+
+gatk --java-options "-Xmx24g -Xms24g" VariantRecalibrator \
+-V obesity/pileup/public/output/cohort_sitesonly.vcf.gz \
+--trust-all-polymorphic -tranche 100.0 -tranche 99.95 \
+-tranche 99.9 -tranche 99.5 -tranche 99.0 -tranche 97.0 \
+-tranche 96.0 -tranche 95.0 -tranche 94.0 -tranche 93.5 \
+-tranche 93.0 -tranche 92.0 -tranche 91.0 -tranche 90.0 \
+-an FS -an ReadPosRankSum -an QD -an SOR -an DP \
+-mode INDEL --max-gaussians 1 \
+-resource:mills,known=false,training=true,truth=true,prior=12 gatk/Mills_and_1000G.vcf.gz \
+-resource:axiomPoly,known=false,training=true,truth=false,prior=10 gatk/Axiom_Exome_Plus.vcf.gz \
+-resource:dbsnp,known=true,training=false,truth=false,prior=2 gatk/dbsnp138.vcf.gz \
+-O obesity/pileup/public/output/cohort_indels.recal \
+--tranches-file obesity/pileup/public/output/cohort_indels.tranches
+
+gatk --java-options "-Xmx3g -Xms3g" VariantRecalibrator \
+-V obesity/pileup/public/output/cohort_sitesonly.vcf.gz \
+--trust-all-polymorphic \
+-tranche 100.0 -tranche 99.95 -tranche 99.9 \
+-tranche 99.8 -tranche 99.6 -tranche 99.5 \
+-tranche 99.4 -tranche 99.3 -tranche 99.0 \
+-tranche 98.0 -tranche 97.0 -tranche 90.0 \
+-an QD -an MQRankSum -an ReadPosRankSum -an FS -an MQ -an SOR -an DP \
+-mode SNP --max-gaussians 3 \
+-resource:hapmap,known=false,training=true,truth=true,prior=15 gatk/hapmap_3.3.hg38.vcf.gz \
+-resource:omni,known=false,training=true,truth=true,prior=12 gatk/1000G_omni2.5.hg38.vcf.gz \
+-resource:1000G,known=false,training=true,truth=false,prior=10 gatk/1000G_phase1.snps.vcf.gz \
+-resource:dbsnp,known=true,training=false,truth=false,prior=7 gatk/dbsnp138.vcf.gz \
+-O obesity/pileup/public/output/cohort_snps.recal \
+--tranches-file obesity/pileup/public/output/cohort_snps.tranches
+
+gatk --java-options "-Xmx5g -Xms5g" \
+    ApplyVQSR \
+    -V obesity/pileup/public/output/cohort_excesshet.vcf.gz \
+    --recal-file obesity/pileup/public/output/cohort_indels.recal \
+    --tranches-file obesity/pileup/public/output/cohort_indels.tranches \
+    --truth-sensitivity-filter-level 99.7 \
+    --create-output-variant-index true \
+    -mode INDEL \
+    -O obesity/pileup/public/output/indel.recalibrated.vcf.gz
+
+gatk --java-options "-Xmx5g -Xms5g" \
+    ApplyVQSR \
+    -V obesity/pileup/public/output/indel.recalibrated.vcf.gz \
+    --recal-file obesity/pileup/public/output/cohort_snps.recal \
+    --tranches-file obesity/pileup/public/output/cohort_snps.tranches \
+    --truth-sensitivity-filter-level 99.7 \
+    --create-output-variant-index true \
+    -mode SNP \
+    -O obesity/pileup/public/output/snp_indels.recalibrated.vcf.gz 
+
+# Select variant without tags
+gatk SelectVariants \
+-V obesity/pileup/public/output/snp_indels.recalibrated.vcf.gz \
+--exclude-filtered true \
+-O obesity/pileup/public/output/snp_indels.filtered.vcf.gz
+
+# Split SNP
+gatk SelectVariants \
+    -V obesity/pileup/public/output/snp_indels.filtered.vcf.gz \
+    -select-type SNP \
+    -O obesity/pileup/public/output/snps.filtered.vcf.gz 
+
+# Annotation
+# snpEff
+java -Xmx16g -jar gatk/snpEff/SnpSift.jar annotate gatk/dbsnp138.vcf \
+-dbsnp obesity/pileup/public/output/snps.filtered.vcf.gz > obesity/pileup/public/output/annotation/snpEff/snps.dbSnp.vcf
+
+java -Xmx16g -jar gatk/snpEff/snpEff.jar \
+-v -s obesity/pileup/public/output/annotation/snpEff/snpEff_snps.html \
+-canon hg38 \
+obesity/pileup/public/output/annotation/snpEff/snps.dbSnp.vcf > obesity/pileup/public/output/annotation/snpEff/snpEff_snps.vcf
+
+# snpSift
+java -Xmx16g -jar gatk/snpEff/SnpSift.jar \
+extractFields -s "," -e "." \
+obesity/pileup/public/output/annotation/snpEff/snpEff_snps.vcf \
+CHROM POS ID REF ALT AF DP "ANN[*].GENE" "ANN[*].GENEID" "ANN[*].EFFECT" "ANN[*].IMPACT" "ANN[*].FEATURE" "ANN[*].FEATUREID" "ANN[*].BIOTYPE" "ANN[*].HGVS_C" "ANN[*].HGVS_P" > obesity/pileup/public/output/annotation/snpEff/snpEff_snps.txt
+
+# Funcotator
+gatk Funcotator -R gatk/hg38.fasta \
+-V obesity/pileup/public/output/snps.filtered.vcf.gz \
+-O obesity/pileup/public/output/annotation/funcotator/funco_snps \
+--output-file-format MAF \
+--data-sources-path gatk/funcotator_dataSources.v1.7.20200521g \
+--ref-version hg38
+
+# Query genotype
+bcftools query -f '%CHROM %POS %ID %REF %ALT [ %GT]\n' \
+snps.dbSnp.vcf -o geno_snps
+------------------------------------------------------------------------------
+plink \
+    --bfile obs_ngs \
+    --maf 0.05 \
+    --hwe 1e-6 \
+    --geno 0.1 \
+    --write-snplist \
+    --make-bed \
+    --out obs_ngs.QC
+
+plink \
+    --bfile obs_ngs.QC \
+   --freq \
+   --out obs_ngs.QC
+plink \
+    --bfile obs_ngs \
+   --freq \
+   --out obs_ngs
+-------------------------------------------------------------------------------
+vcftools --vcf snps.dbSnp.vcf --snps mySNPs.txt --recode --recode-INFO-all 
+awk '{gsub(/\chr/, "")}1'  snps.recode.vcf > snp_nochr.vcf
+
+bcftools query -f '%CHROM %POS %ID %REF %ALT %QUAL %FILTER %INFO [ %GT]\n' \
+snp_nochr.vcf | bgzip -c > obs_geno_snps.vcf.gz && tabix -s1 -b2 -e2 obs_geno_snps.vcf.gz
+
+bcftools query -f'%CHROM\t%POS\t%ID\t%REF\t%ALT\t%QUAL\t%FILTER\t%INFO\t[ %GT]\n' \
+snp_nochr.vcf.gz | bgzip -c > obs_snp_nochr.vcf.gz && tabix -s1 -b2 -e2 obs_snp_nochr.vcf.gz
+
+bcftools query -f'%CHROM\t%POS\t%REF,%ALT\n' file.vcf | bgzip -c > als.tsv.gz && tabix -s1 -b2 -e2 als.tsv.gz
+
+bcftools query -f '%CHROM %POS %ID %REF %ALT %QUAL %FILTER %INFO [ %GT]\n' \
+snp_nochr.vcf.gz \
+-O obs_snp_nochr \
+
+bcftools annotate -x ^FORMAT/GT snp_nochr.vcf.gz -o obs_snp_nochr.vcf
+
+vcftools --gzvcf snp_nochr.vcf.gz --extract-FORMAT-info GT --recode --recode-INFO-all 
+
+vcftools --gzvcf snp_nochr.vcf.gz --IMPUTE
+
+plink --bfile obs_ngs.QC --recode vcf --out obs_snp
+
+
+java -jar conform-gt.24May16.cee.jar \
+ref=ALL.chr14.shapeit2_integrated_snvindels_v2a_27022019.GRCh38.phased.vcf.gz \
+gt=snp_nochr.vcf.gz \
+chrom=14 \
+out=conformed_obs_snp_chr14
+
+
+./impute5_1.1.5_static --h ref_data/ALL.chr1.shapeit2_integrated_snvindels_v2a_27022019.GRCh38.phased.vcf.gz \
+--g obs_snp_nochr.vcf.gz \
+--m genetic_maps.b38.tar.gz \
+--o imputed_chr1.vcf \
+--r 1 \
+--threads 72 
+
+./impute5_1.1.5_static --h ALL.chr14.shapeit2_integrated_snvindels_v2a_27022019.GRCh38.phased.vcf.gz \
+--g obs_snp_nochr.vcf.gz \
+--m genetic_maps.b38.tar.gz \
+--o imputed_chr14.vcf \
+--r 14 \
+--threads 72
+
+
+
+imp5Converter_1.1.5_static --h ALL.chr14.shapeit2_integrated_snvindels_v2a_27022019.GRCh38.phased.vcf.gz --r 14 --o chr_reference.imp5
+
+impute5_1.1.5_static --h chr_reference.imp5 \
+--m genetic_maps.b38.tar.gz \
+--g snps.filtered.vcf.gz \
+--r 14 \
+--threads 72 \
+--o imputed.vcf 
+-------------------------------------------------------------------------
+# Download data
+wget https://cgl.gi.ucsc.edu/data/giraffe/construction/ALL.chr{{1..22},X}_GRCh38.genotypes.20170504.vcf.gz{,.tbi}
+
+
+minimac4 --compress-reference ref_panel.vcf.gz > ref_panel.msav.gz
+
+minimac4 ref_panel.msav.gz tar_panel_removed.vcf.gz -o imputed.vcf
+
+# Query genotype
+bcftools query -H -f '%CHROM %POS %ID %REF %ALT %QUAL %FILTER %INFO %FORMAT [ %GT]\n' \
+snps.dbSnp.vcf | bgzip -c > snps.for.impute.vcf.gz && tabix -p vcf snps.for.impute.vcf.gz
+
+bcftools query -H -f '%CHROM %POS %ID %REF %ALT %QUAL %FILTER %INFO %FORMAT [ %GT]\n' \
+snps.dbSnp.vcf -o snps.for.impute.vcf
+
+

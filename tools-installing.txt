@@ -1,0 +1,33 @@
+conda install -c bioconda bcftools
+conda install -c bioconda plink
+conda install -c bioconda sra-tools # download sra
+conda install -c anaconda git
+conda install -c conda-forge docker
+conda install -c bioconda fastqc
+conda install -c bioconda trimmomatic
+conda install -c bioconda bwa
+conda install -c bioconda tabix
+pip install bed-reader
+conda install vcftools
+#conda install -c bioconda java-jdk
+#conda install -c bioconda gatk4
+#conda install -c conda-forge openmpi
+
+# Install samtools
+# Download samtools latest version
+https://sourceforge.net/projects/samtools/files/samtools/
+tar xvjf samtools-1.1.tar.bz2 
+cd samtools-1.1
+make
+export PATH=$PATH:/directory/samtools-0.1.19 
+export PATH=$PATH:/work/users/minhnth/gatk/gatk-4.2.0.0 # Install gatk
+
+
+----------------------------------------------
+# Install for PRStools
+conda install R
+install.packages("remotes")
+remotes::install_github("privefl/bigsnpr")
+conda install -c conda-forge r-bigstatsr
+
+
